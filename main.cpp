@@ -1,229 +1,185 @@
-#include<cstddef>
+#include <algorithm>
+#include <cstdint>
 #include <iostream>
-#include <map>
-#include<memory>
-#include<tuple>
-
-using namespace std;
-
-struct BadOptionalAccess {
-};
+#include <math.h>
+#include <memory>
 
 template <typename T>
-class Optional {
-private:
-    alignas(T) unsigned char data[sizeof(T)];
-    bool defined = false;
+struct RawMemory {
+    T* buf = nullptr;
+    size_t rsv = 0;
+    static T* Allocate(size_t n) {
+        return static_cast<T*>(operator new(n * sizeof(T)));
+    }
 
-public:
-    Optional() = default;
-    Optional(const T& elem) {
-        new (data) T(elem);
-        defined = true;
+    static void Deallocate(T* buffer) {
+        operator delete(buffer);
     }
-    Optional(T && elem) {
-        new (data) T(std::move(elem));
-        defined = true;
+
+    void Swap(RawMemory& other) noexcept {
+        std::swap(buf, other.buf);
+        std::swap(rsv, other.rsv);
     }
-    Optional(const Optional& other) {
-        if (other.has_value()) {
-            new (data) T(other.value());
-            defined = true;
-        }
+    RawMemory() = default;
+
+    RawMemory(size_t n) {
+        buf = Allocate(n);
+        rsv = n;
     }
-    Optional& operator=(const Optional& other) {
-        if (data == other.data) {
-            return *this;
-        }
-        if (defined) {
-            if (other.has_value()) {
-                value() = other.value();
-            } else {
-                reset();
-            }
-        } else {
-            if (other.has_value()) {
-                new (data) T(other.value());
-                defined = true;
-            }
-        }
-        return *this;
+
+    RawMemory(const RawMemory&) = delete;
+
+    RawMemory(RawMemory&& other) {
+        Swap(other);
     }
-    Optional& operator=(const T& elem) {
-        if (defined) {
-            value() = elem;
-        } else {
-            new (data) T(elem);
-            defined = true;
-        }
-        return *this;
-    }
-    Optional& operator=(T&& elem) {
-        if (defined) {
-            value() = std::move(elem);
-        } else {
-            new (data) T(std::move(elem));
-            defined = true;
-        }
+
+    RawMemory& operator = (const RawMemory&) = delete;
+
+    RawMemory& operator = (RawMemory&& other) noexcept {
+        Swap(other);
         return *this;
     }
 
-    bool has_value() const {
-        return defined;
+    ~RawMemory() {
+        Deallocate(buf);
     }
 
-    T& operator*() {
-        if (!defined) {
-            throw BadOptionalAccess();
-        } else {
-            return *reinterpret_cast<T*>(data);
-        }
+    T* operator + (size_t i) {
+        return buf + i;
     }
-    const T& operator*() const {
-        if (!defined) {
-            throw BadOptionalAccess();
-        } else {
-            return *reinterpret_cast<const T*>(data);
-        }
+    const T* operator + (size_t i) const {
+        return buf + i;
     }
-
-    T* operator->() {
-        if (!defined) {
-            throw BadOptionalAccess();
-        }
-        return reinterpret_cast<T*>(data);
+    T&operator[] (size_t i) {
+        return buf[i];
     }
-    const T* operator->() const {
-        if (!defined) {
-            throw BadOptionalAccess();
-        }
-        return reinterpret_cast<const T*>(data);
-    }
-
-    T& value() {
-        if (!defined) {
-            throw BadOptionalAccess();
-        }
-        return *reinterpret_cast<T*>(data);
-    }
-    const T& value() const {
-        if (!defined) {
-            throw BadOptionalAccess();
-        }
-        return *reinterpret_cast<const T*>(data);
-    }
-
-    void reset() {
-        if (defined) {
-            value().~T();
-            defined = false;
-        }
-    }
-
-    ~Optional() {
-        reset();
+    const T&operator[] (size_t i) const {
+        return buf[i];
     }
 };
 
 template <typename T>
-class List {
+class Vector {
 private:
+    RawMemory<T> data;
     size_t sz = 0;
 
-    struct Elem {
-        Optional<T> val;
-        Elem* next = nullptr;
-        Elem* prev = nullptr;
-        Elem() = default;
-        Elem(const T& el) : val(el) {}
-    };
-    class Iterator {
-    private:
-        const Elem* elem = nullptr;
-
-    public:
-        Iterator() = default;
-        Iterator& operator++() {
-            elem = elem->next;
-            return *this;
-        }
-        Iterator operator++(int) {
-            const Elem* tmp = elem;
-            elem = elem->next;
-            return tmp;
-        }
-        Iterator& operator--() {
-            elem = elem->prev;
-            return *this;
-        }
-        Iterator operator--(int) {
-            const Elem* tmp = elem;
-            elem = elem->prev;
-            return tmp;
-        }
-        const T&operator*() const {
-            return elem->val.value();
-        }
-        bool operator == (Iterator it) const {
-            return elem == it.elem;
-        }
-        bool operator != (Iterator it) const {
-            return elem != it.elem;
-        }
-
-        Iterator(const Elem* el) : elem(el) {}
-    };
-
-    Elem base;
-
-    void push(Elem* elem, const T& tp) {
-        Elem* el = new Elem(tp);
-        elem->next->prev = el;
-        el->next = elem->next;
-        el->prev = elem;
-        elem->next = el;
+    static void Construct(void * buf) {
+        new (buf) T();
     }
-    void pop(Elem* elem) {
-        elem->prev->next = elem->next;
-        elem->next->prev = elem->prev;
-        delete elem;
+    static void Construct(void * buf, const T& elem) {
+        new (buf) T(elem);
     }
+    static void Construct(void * buf, const T&& elem) {
+        new (buf) T(std::move(elem) );
+    }
+    static void Destroy(T* buf) {
+        buf->~T();
+    }
+
 
 public:
-    List() {
-        base.next = base.prev = &base;
+    Vector() = default;
+    explicit Vector(size_t n) : data(n) {
+        std::uninitialized_value_construct_n(data.buf, n);
+        sz = n;
+    }
+    Vector(const Vector& v) : data(v.sz) {
+        std::uninitialized_copy_n(v.data.buf, v.sz, data.buf);
+        sz = v.sz;
+    }
+    Vector(Vector&& v) noexcept {
+        swap(v);
+    }
+    void swap(Vector& v) noexcept {
+        data.Swap(v.data);
+        std::swap(sz, v.sz);
+    }
+    size_t capacity() const {
+        return data.rsv;
     }
     size_t size() const {
         return sz;
     }
-    size_t size() {
-        return sz;
+    Vector& operator = (const Vector& other) {
+        if (other.sz > data.rsv) {
+            Vector tmp(other);
+            swap(tmp);
+        } else {
+            for (size_t i = 0; i < sz && i < other.sz; i++) {
+                data[i] = other[i];
+            }
+            if (sz < other.sz) {
+                std::uninitialized_copy_n(other.data + sz, other.sz - sz, data.buf + sz);
+            }
+            if (sz > other.sz) {
+                std::destroy_n(data.buf + other.sz, sz - other.sz);
+            }
+            sz = other.sz;
+        }
+        return *this;
+    }
+    Vector& operator = (Vector&& other) noexcept {
+        swap(other);
+        return *this;
+    }
+    T& operator[] (size_t i) {
+        return data.buf[i];
+    }
+    const T& operator[] (size_t i) const {
+        return data.buf[i];
     }
     void push_back(const T& a) {
-        push(base.prev, a);
+        if (sz == data.rsv) {
+            reserve(sz == 0 ? 1 : sz * 2);
+        }
+        new (data + sz) T(a);
         sz++;
     }
-    void push_front(const T& a) {
-        push(&base, a);
+    void push_back(T&& a) {
+        if (sz == data.rsv) {
+            reserve(sz == 0 ? 1 : sz * 2);
+        }
+        new (data + sz) T(std::move(a));
         sz++;
-    }
-    void pop_front() {
-        pop(base.next);
-        sz--;
     }
     void pop_back() {
-        pop(base.prev);
-        sz--;
+        std::destroy_at(data + sz - 1);
+        --sz;
     }
-    Iterator begin() {
-        return Iterator(base.next);
+    void clear() {
+        resize(0);
     }
-    Iterator end() {
-        return Iterator(&base);
-    }
-    ~List() {
-        while (sz > 0) {
-            pop_back();
+    void reserve(size_t n) {
+        if (n > data.rsv) {
+            RawMemory<T> data2(n);
+            std::uninitialized_move_n(data.buf, sz, data2.buf);
+            std::destroy_n(data.buf, sz);
+            data.Swap(data2);
         }
+    }
+    void resize(size_t n) {
+        reserve(n);
+        if (sz < n) {
+            std::uninitialized_value_construct_n(data + sz, n - sz);
+        } else if (sz > n) {
+            std::destroy_n(data + n, sz - n);
+        }
+        sz = n;
+    }
+    T* begin() {
+        return data.buf;
+    }
+    const T* begin() const {
+        return data.buf;
+    }
+    T* end() {
+        return data + sz;
+    }
+    const T* end() const {
+        return data + sz;
+    }
+    ~Vector() {
+        std::destroy_n(data.buf, sz);
     }
 };
